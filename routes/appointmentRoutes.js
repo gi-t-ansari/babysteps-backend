@@ -1,6 +1,8 @@
 import express from "express";
 import Appointment from "../models/Appointment.js";
 import Doctor from "../models/Doctor.js";
+import { appointmentSchema } from "../validators/appointmentValidator.js";
+import moment from "moment";
 
 const router = express.Router();
 
@@ -31,42 +33,25 @@ router.get("/:id", async (req, res) => {
 // 📌 CREATE a new appointment with validation
 router.post("/", async (req, res) => {
   try {
+    // Validate request body using Yup
+    await appointmentSchema.validate(req.body, { abortEarly: false });
+
     const { doctorId, date, duration, appointmentType, patientName, notes } =
       req.body;
-    if (!doctorId || !date || !duration || !appointmentType || !patientName) {
-      return res.status(400).json({ message: "Missing required fields" });
-    }
 
+    // Ensure doctor exists
     const doctor = await Doctor.findById(doctorId);
     if (!doctor) return res.status(404).json({ message: "Doctor not found" });
 
-    const appointmentDate = new Date(date);
-    if (isNaN(appointmentDate.getTime())) {
-      return res.status(400).json({ message: "Invalid date format" });
-    }
-
-    // Convert time to HH:MM
-    const appointmentTime = appointmentDate.toISOString().substring(11, 16);
-    if (
-      appointmentTime < doctor.workingHours.start ||
-      appointmentTime >= doctor.workingHours.end
-    ) {
-      return res
-        .status(400)
-        .json({ message: "Appointment time is outside of working hours" });
-    }
-
-    // Check for overlapping appointments
-    const overlappingAppointment = await Appointment.findOne({
+    // Ensure slot is available
+    const appointmentDate = moment(date).toDate();
+    const existingAppointments = await Appointment.find({
       doctorId,
-      date: {
-        $gte: appointmentDate,
-        $lt: new Date(appointmentDate.getTime() + duration * 60000),
-      },
+      date: appointmentDate,
     });
 
-    if (overlappingAppointment) {
-      return res.status(400).json({ message: "Time slot is already booked" });
+    if (existingAppointments.length > 0) {
+      return res.status(400).json({ message: "Time slot already booked" });
     }
 
     const newAppointment = new Appointment({
@@ -77,9 +62,14 @@ router.post("/", async (req, res) => {
       patientName,
       notes,
     });
+
     await newAppointment.save();
     res.status(201).json(newAppointment);
   } catch (error) {
+    if (error.name === "ValidationError") {
+      return res.status(400).json({ errors: error.errors });
+    }
+    console.error(error);
     res.status(500).json({ message: "Server Error", error });
   }
 });

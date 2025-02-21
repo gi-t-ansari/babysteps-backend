@@ -1,6 +1,7 @@
 import express from "express";
 import Doctor from "../models/Doctor.js";
 import Appointment from "../models/Appointment.js";
+import moment from "moment";
 
 const router = express.Router();
 
@@ -73,47 +74,44 @@ router.get("/:id/slots", async (req, res) => {
     const { date } = req.query;
     if (!date) return res.status(400).json({ message: "Date is required" });
 
-    const selectedDate = new Date(date);
-    selectedDate.setHours(0, 0, 0, 0);
+    const selectedDate = moment(date, "YYYY-MM-DD").startOf("day");
 
+    const startTime = moment(
+      `${date} ${doctor.workingHours.start}`,
+      "YYYY-MM-DD HH:mm"
+    );
+    const endTime = moment(
+      `${date} ${doctor.workingHours.end}`,
+      "YYYY-MM-DD HH:mm"
+    );
+
+    // Fetch booked appointments
     const appointments = await Appointment.find({
       doctorId: doctor._id,
       date: {
-        $gte: selectedDate,
-        $lt: new Date(selectedDate.getTime() + 86400000),
+        $gte: startTime.toDate(),
+        $lt: endTime.toDate(),
       },
     });
 
-    const timeSlots = [];
-    let [startHour, startMinute] = doctor.workingHours.start
-      .split(":")
-      .map(Number);
-    const [endHour, endMinute] = doctor.workingHours.end.split(":").map(Number);
+    // Generate time slots
+    let timeSlots = [];
+    let currentTime = startTime.clone();
 
-    while (
-      startHour < endHour ||
-      (startHour === endHour && startMinute < endMinute)
-    ) {
-      const time = `${String(startHour).padStart(2, "0")}:${String(
-        startMinute
-      ).padStart(2, "0")}`;
-      timeSlots.push(time);
-      startMinute += 30;
-      if (startMinute >= 60) {
-        startMinute = 0;
-        startHour += 1;
-      }
+    while (currentTime.isBefore(endTime)) {
+      timeSlots.push(currentTime.format("HH:mm"));
+      currentTime.add(30, "minutes"); // 30-minute intervals
     }
 
-    const bookedSlots = appointments.map((a) =>
-      a.date.toISOString().substring(11, 16)
-    );
+    // Remove booked slots
+    const bookedSlots = appointments.map((a) => moment(a.date).format("HH:mm"));
     const availableSlots = timeSlots.filter(
       (slot) => !bookedSlots.includes(slot)
     );
 
     res.json({ availableSlots });
   } catch (error) {
+    console.error(error);
     res.status(500).json({ message: "Server Error", error });
   }
 });
